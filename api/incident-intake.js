@@ -1,5 +1,4 @@
 // api/incident-intake.js
-import crypto from "crypto";
 
 // ===== CORS erlauben (für Framer) =====
 function setCORS(res) {
@@ -20,33 +19,31 @@ function toISO(dt) {
 }
 
 // ===== Awareness aus Request robust parsen =====
+// Akzeptiert:
+//  - "YYYY-MM-DDTHH:mm" (vom <input type="datetime-local">) -> lokale Zeit
+//  - ISO-Strings mit Zeitzone
 function parseAwareness(reqBody) {
-  const s = (reqBody && reqBody.awarenessTime || "").trim();
-  if (!s) return new Date();
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  const raw = (reqBody && reqBody.awarenessTime ? String(reqBody.awarenessTime) : "").trim();
+  if (!raw) return { dt: new Date(), source: "fallback_now", received: raw };
+
+  const normalized = raw.replace(" ", "T"); // Safari/Locale-Fix
+  const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
   if (m) {
     const [_, Y, Mo, D, H, Mi] = m.map(Number);
-    return new Date(Y, Mo - 1, D, H, Mi); // lokale Zeit
+    const local = new Date(Y, Mo - 1, D, H, Mi); // lokale Zeit
+    return { dt: local, source: "datetime-local", received: raw };
   }
-  const dt = new Date(s);
-  if (!isNaN(dt)) return dt;
-  return new Date();
+
+  const dt = new Date(normalized);
+  if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw };
+
+  return { dt: new Date(), source: "invalid_fallback_now", received: raw };
 }
 
-// ===== Dateien prüfen & hashen =====
-function parseFiles(filesInput) {
+// ===== Dateien nur als Metadaten akzeptieren (ohne Node-Imports) =====
+function collectFiles(filesInput) {
   const MAX_FILES = 3;
-  const MAX_SIZE = 3 * 1024 * 1024; // 3 MB pro Datei
-  const ALLOWED_TYPES = [
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "message/rfc822",
-    "application/vnd.ms-outlook",
-    "image/png",
-    "image/jpeg"
-  ];
-
+  const MAX_SIZE = 3 * 1024 * 1024;
   const files = Array.isArray(filesInput) ? filesInput : [];
   if (files.length > MAX_FILES) throw new Error("Maximal 3 Dateien erlaubt.");
 
@@ -57,31 +54,11 @@ function parseFiles(filesInput) {
     const size = Number(f?.size || 0);
     const base64 = String(f?.data || "");
 
-    if (!name || !base64) continue; // leere Einträge ignorieren
+    if (!name || !base64) continue;
     if (size > MAX_SIZE) throw new Error(`Datei zu groß: ${name} (max. 3 MB)`);
-    if (ALLOWED_TYPES.length && type && !ALLOWED_TYPES.includes(type)) {
-      // Typ nicht kritisch: wir lassen durch, markieren aber als "unknown"
-    }
 
-    // Base64 -> Buffer
-    let buf;
-    try {
-      buf = Buffer.from(base64, "base64");
-    } catch {
-      throw new Error(`Ungültiges Datei-Format: ${name}`);
-    }
-
-    // Hash berechnen
-    const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-
-    out.push({
-      name,
-      type: type || "unknown",
-      size,
-      sha256,
-      // Für MVP speichern/versenden wir die Datei noch NICHT.
-      // Später: Upload zu Storage (z.B. Vercel Blob / S3) und URL hier zurückgeben.
-    });
+    // Fürs MVP speichern wir nicht. Nur Metadaten zurückgeben.
+    out.push({ name, type: type || "unknown", size });
   }
   return out;
 }
@@ -98,27 +75,29 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "contactEmail und freeText sind Pflicht" });
   }
 
-  // Awareness
-  const awareness = parseAwareness(req.body);
+  // Awareness interpretieren
+  const { dt: awareness, source: awarenessSource, received: awarenessReceived } = parseAwareness(req.body);
 
-  // Deadlines (UTC)
+  // Deadlines berechnen (UTC)
   const due = {
     earlyWarning: toISO(addHours(awareness, 24)),
     incidentNotification: toISO(addHours(awareness, 72)),
     finalReport: toISO(addDays(awareness, 30)),
   };
 
-  // Dateien einlesen + hashen (MVP)
+  // Dateien einsammeln (nur Metadaten)
   let filesMeta = [];
   try {
-    filesMeta = parseFiles(files);
+    filesMeta = collectFiles(files);
   } catch (e) {
     return res.status(400).json({ error: String(e.message || e) });
   }
 
-  // Antwort (MVP)
+  // Antwort inkl. Debug-Felder, damit du siehst, WAS ankam
   return res.status(200).json({
     intakeId: "demo-" + Date.now(),
+    awarenessReceived, // das kam vom Browser
+    awarenessSource,   // wie wir es interpretiert haben
     awarenessTime: toISO(awareness),
     due,
     files: filesMeta,
