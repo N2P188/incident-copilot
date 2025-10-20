@@ -1,15 +1,33 @@
+// api/incident-intake.js
+
+// --- CORS erlauben ---
+function setCORS(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 export default async function handler(req, res) {
+  setCORS(res);
+
+  // Preflight von Browsern
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST" });
   }
-  // Heute nur Platzhalter – wir prüfen später alles genau.
+
+  // Heutiger Minimal-Check
   const { contactEmail, freeText } = req.body || {};
   if (!contactEmail || !freeText) {
     return res.status(400).json({ error: "contactEmail und freeText sind Pflicht" });
   }
-  // Antwort mit Dummy-Deadlines (später richtig berechnet)
+
+  // Dummy-Deadlines (wir bauen das später richtig)
   return res.status(200).json({
     intakeId: "demo-" + Date.now(),
     due: {
