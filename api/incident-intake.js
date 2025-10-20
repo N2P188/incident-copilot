@@ -14,17 +14,68 @@ function toISO(dt) { return dt.toISOString().replace(/\.\d{3}Z$/, "Z"); }
 function parseAwareness(reqBody) {
   const raw = (reqBody && reqBody.awarenessTime ? String(reqBody.awarenessTime) : "").trim();
   if (!raw) return { dt: new Date(), source: "fallback_now", received: raw };
+  if (!raw) return { dt: new Date(), source: "fallback_now", received: raw, offsetMinutes: null };
 
   const normalized = raw.replace(" ", "T"); // Safari/Locale-Fix
+
+  const offsetInfo = extractOffset(reqBody);
+
   const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
   if (m) {
     const [_, Y, Mo, D, H, Mi] = m.map(Number);
     return { dt: new Date(Y, Mo - 1, D, H, Mi), source: "datetime-local", received: raw };
+    const Y = Number(m[1]);
+    const Mo = Number(m[2]);
+    const D = Number(m[3]);
+    const H = Number(m[4]);
+    const Mi = Number(m[5]);
+    const baseUtc = Date.UTC(Y, Mo - 1, D, H, Mi);
+    if (offsetInfo) {
+      const dt = new Date(baseUtc - offsetInfo.appliedMinutes * 60000);
+      return {
+        dt,
+        source: `datetime-local(${offsetInfo.source})`,
+        received: raw,
+        offsetMinutes: offsetInfo.appliedMinutes,
+      };
+    }
+    // Fallback: treat as UTC to keep deterministic behaviour
+    return {
+      dt: new Date(baseUtc),
+      source: "datetime-local(assumed-utc)",
+      received: raw,
+      offsetMinutes: null,
+    };
   }
   const dt = new Date(normalized);
   if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw };
+  if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw, offsetMinutes: null };
+
+  return { dt: new Date(), source: "invalid_fallback_now", received: raw, offsetMinutes: null };
+}
+
+function extractOffset(reqBody) {
+  if (!reqBody) return null;
+  const candidates = [
+    ["awarenessOffsetMinutes", 1],
+    ["awarenessClientOffsetMinutes", 1],
+    ["awarenessTimezoneOffset", -1],
+    ["awarenessClientTimezoneOffset", -1],
+  ];
+
+  for (const [field, multiplier] of candidates) {
+    if (reqBody[field] === undefined || reqBody[field] === null || reqBody[field] === "") continue;
+    const numeric = Number(reqBody[field]);
+    if (!Number.isFinite(numeric)) continue;
+    return {
+      source: field,
+      rawMinutes: numeric,
+      appliedMinutes: numeric * multiplier,
+    };
+  }
 
   return { dt: new Date(), source: "invalid_fallback_now", received: raw };
+  return null;
 }
 
 function collectFiles(filesInput) {
@@ -57,6 +108,12 @@ export default async function handler(req, res) {
   }
 
   const { dt: awareness, source: awarenessSource, received: awarenessReceived } = parseAwareness(req.body);
+  const {
+    dt: awareness,
+    source: awarenessSource,
+    received: awarenessReceived,
+    offsetMinutes: awarenessOffsetMinutes,
+  } = parseAwareness(req.body);
 
   const due = {
     earlyWarning: toISO(addHours(awareness, 24)),
@@ -72,6 +129,7 @@ export default async function handler(req, res) {
     intakeId: "demo-" + Date.now(),
     awarenessReceived,         // <- was vom Browser kam
     awarenessSource,           // <- wie interpretiert
+    awarenessOffsetMinutes,
     awarenessTime: toISO(awareness), // <- UTC
     due,
     files: filesMeta,
