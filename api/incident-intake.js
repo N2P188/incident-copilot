@@ -30,12 +30,19 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "contactEmail und freeText sind Pflicht" });
   }
 
-  // Zeitpunkt der Eingabe = Awareness-Zeitpunkt
-  const awareness = new Date();
-  const due = {
-    earlyWarning: toISO(addHours(awareness, 24)),
-    incidentNotification: toISO(addHours(awareness, 72)),
-    finalReport: toISO(addDays(awareness, 30))
+// Zeitpunkt der Eingabe = Awareness-Zeitpunkt
+// Neu: falls der Nutzer selbst eine Zeit mitgibt, diese nehmen
+let awareness;
+if (req.body.awarenessTime) {
+  // Versuchen, Datum aus dem String zu lesen
+  awareness = new Date(req.body.awarenessTime);
+  if (isNaN(awareness)) {
+    awareness = new Date(); // Fallback auf jetzt
+  }
+} else {
+  awareness = new Date();
+}
+
   };
 
   // Antwort
