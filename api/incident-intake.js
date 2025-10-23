@@ -3,7 +3,6 @@ import { askLLMAsJson } from "../lib/llm.js";
 import { buildIncidentPrompt } from "../lib/prompts.js";
 import { put } from "@vercel/blob";
 
-
 // --- CORS erlauben ---
 function setCORS(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -69,7 +68,7 @@ const ALLOWED_MIME = new Set([
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "message/rfc822",               // .eml
-  "application/vnd.ms-outlook",   // .msg (manchmal so)
+  "application/vnd.ms-outlook",   // .msg
   "image/png",
   "image/jpeg",
   "application/octet-stream"      // Fallback
@@ -107,7 +106,6 @@ async function uploadFilesToBlob(intakeId, filesInput) {
       throw new Error(`Dateityp/Endung nicht erlaubt: ${name} (${type || "unknown"})`);
     }
 
-    // Base64 → Buffer
     const buffer = Buffer.from(base64, "base64");
     const path = `${intakeId}/${Date.now()}-${name}`;
 
@@ -120,7 +118,7 @@ async function uploadFilesToBlob(intakeId, filesInput) {
       name,
       type,
       size: storedSize ?? size,
-      url,            // öffentlich abrufbar
+      url,
       blobPath: pathname
     });
   }
@@ -154,8 +152,11 @@ export default async function handler(req, res) {
   let uploaded = [];
   try {
     uploaded = await uploadFilesToBlob(intakeId, files);
-    // === KI-Drafts erzeugen (mit Fallback, falls kein OPENAI_API_KEY) ===
-  // === KI-Drafts erzeugen (mit Fallback, falls kein OPENAI_API_KEY) ===
+  } catch (e) {
+    return res.status(400).json({ error: String(e.message || e) });
+  }
+
+  // === KI-Drafts erzeugen (mit Fallback) ===
   let aiDrafts;
   try {
     const { system, user } = buildIncidentPrompt({
@@ -201,7 +202,7 @@ export default async function handler(req, res) {
     };
   }
 
-  // ⬇️ DAS ist das „Response-JSON“ (die API-Antwort)
+  // --- Response ---
   return res.status(200).json({
     intakeId,
     awarenessReceived,
@@ -210,7 +211,6 @@ export default async function handler(req, res) {
     awarenessTime: toISO(awareness),
     due,
     files: uploaded,
-    // WICHTIG: drafts MUSS auf aiDrafts zeigen:
     drafts: aiDrafts
   });
 }
