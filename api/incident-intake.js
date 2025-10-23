@@ -154,67 +154,62 @@ export default async function handler(req, res) {
   try {
     uploaded = await uploadFilesToBlob(intakeId, files);
     // === KI-Drafts erzeugen (mit Fallback, falls kein OPENAI_API_KEY) ===
-let aiDrafts;
-try {
-  const { system, user } = buildIncidentPrompt({
-    contactEmail,
-    awarenessUtc: toISO(awareness),
-    freeText,
-    files: uploaded
-  });
-  aiDrafts = await askLLMAsJson({ system, user });
-} catch (e) {
-  aiDrafts = {
-    earlyWarning: {
-      reportType: "EARLY_WARNING",
-      summary: "TODO: KI nicht verfügbar – kurze Lagezusammenfassung ergänzen.",
-      awarenessTimeUTC: toISO(awareness),
-      initialImpact: "TODO",
-      likelyCause: "TODO (unsicher)",
-      mitigationSteps: [],
-      nextActions: []
-    },
-    incidentNotification: {
-      reportType: "INCIDENT_NOTIFICATION",
-      summary: "TODO: KI nicht verfügbar – Zwischenstand ergänzen.",
-      timeline: [],
-      affectedServices: [],
-      affectedRegions: [],
-      userImpact: "TODO",
-      indicatorsOfCompromise: [],
-      legalAndRegulatory: [],
-      mitigationSteps: [],
-      openQuestions: []
-    },
-    finalReport: {
-      reportType: "FINAL_REPORT",
-      rootCause: "TODO",
-      detailedImpact: "TODO",
-      dataSubjectsOrRecords: "TODO",
-      fullTimeline: [],
-      lessonsLearned: [],
-      preventiveMeasures: [],
-      attachmentsNote: "Anhänge wurden (noch) nicht inhaltlich ausgewertet."
-    }
-  };
-}
-
+  // === KI-Drafts erzeugen (mit Fallback, falls kein OPENAI_API_KEY) ===
+  let aiDrafts;
+  try {
+    const { system, user } = buildIncidentPrompt({
+      contactEmail,
+      awarenessUtc: toISO(awareness),
+      freeText,
+      files: uploaded
+    });
+    aiDrafts = await askLLMAsJson({ system, user });
   } catch (e) {
-    return res.status(400).json({ error: String(e.message || e) });
+    aiDrafts = {
+      earlyWarning: {
+        reportType: "EARLY_WARNING",
+        summary: "TODO: KI nicht verfügbar – kurze Lagezusammenfassung ergänzen.",
+        awarenessTimeUTC: toISO(awareness),
+        initialImpact: "TODO",
+        likelyCause: "TODO (unsicher)",
+        mitigationSteps: [],
+        nextActions: []
+      },
+      incidentNotification: {
+        reportType: "INCIDENT_NOTIFICATION",
+        summary: "TODO: KI nicht verfügbar – Zwischenstand ergänzen.",
+        timeline: [],
+        affectedServices: [],
+        affectedRegions: [],
+        userImpact: "TODO",
+        indicatorsOfCompromise: [],
+        legalAndRegulatory: [],
+        mitigationSteps: [],
+        openQuestions: []
+      },
+      finalReport: {
+        reportType: "FINAL_REPORT",
+        rootCause: "TODO",
+        detailedImpact: "TODO",
+        dataSubjectsOrRecords: "TODO",
+        fullTimeline: [],
+        lessonsLearned: [],
+        preventiveMeasures: [],
+        attachmentsNote: "Anhänge wurden (noch) nicht inhaltlich ausgewertet."
+      }
+    };
   }
 
+  // ⬇️ DAS ist das „Response-JSON“ (die API-Antwort)
   return res.status(200).json({
     intakeId,
     awarenessReceived,
     awarenessSource,
     awarenessOffsetMinutes,
-    awarenessTime: toISO(awareness), // UTC
+    awarenessTime: toISO(awareness),
     due,
-    files: uploaded, // ⬅️ jetzt mit .url
-    drafts: {
-      earlyWarning: { reportType: "EARLY_WARNING" },
-      incidentNotification: { reportType: "INCIDENT_NOTIFICATION" },
-      finalReport: { reportType: "FINAL_REPORT" }
-    }
+    files: uploaded,
+    // WICHTIG: drafts MUSS auf aiDrafts zeigen:
+    drafts: aiDrafts
   });
 }
