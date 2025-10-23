@@ -1,59 +1,18 @@
 // api/incident-intake.js
 
+// --- CORS erlauben ---
 function setCORS(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
+// --- Datumshilfen ---
 function addHours(date, hours) { return new Date(date.getTime() + hours * 3600000); }
 function addDays(date, days) { return new Date(date.getTime() + days * 86400000); }
 function toISO(dt) { return dt.toISOString().replace(/\.\d{3}Z$/, "Z"); }
 
-// Awareness parsen (datetime-local oder ISO)
-function parseAwareness(reqBody) {
-  const raw = (reqBody && reqBody.awarenessTime ? String(reqBody.awarenessTime) : "").trim();
-  if (!raw) return { dt: new Date(), source: "fallback_now", received: raw };
-  if (!raw) return { dt: new Date(), source: "fallback_now", received: raw, offsetMinutes: null };
-
-  const normalized = raw.replace(" ", "T"); // Safari/Locale-Fix
-
-  const offsetInfo = extractOffset(reqBody);
-
-  const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-  if (m) {
-    const [_, Y, Mo, D, H, Mi] = m.map(Number);
-    return { dt: new Date(Y, Mo - 1, D, H, Mi), source: "datetime-local", received: raw };
-    const Y = Number(m[1]);
-    const Mo = Number(m[2]);
-    const D = Number(m[3]);
-    const H = Number(m[4]);
-    const Mi = Number(m[5]);
-    const baseUtc = Date.UTC(Y, Mo - 1, D, H, Mi);
-    if (offsetInfo) {
-      const dt = new Date(baseUtc - offsetInfo.appliedMinutes * 60000);
-      return {
-        dt,
-        source: `datetime-local(${offsetInfo.source})`,
-        received: raw,
-        offsetMinutes: offsetInfo.appliedMinutes,
-      };
-    }
-    // Fallback: treat as UTC to keep deterministic behaviour
-    return {
-      dt: new Date(baseUtc),
-      source: "datetime-local(assumed-utc)",
-      received: raw,
-      offsetMinutes: null,
-    };
-  }
-  const dt = new Date(normalized);
-  if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw };
-  if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw, offsetMinutes: null };
-
-  return { dt: new Date(), source: "invalid_fallback_now", received: raw, offsetMinutes: null };
-}
-
+// --- Offset aus dem Request ziehen ---
 function extractOffset(reqBody) {
   if (!reqBody) return null;
   const candidates = [
@@ -62,22 +21,45 @@ function extractOffset(reqBody) {
     ["awarenessTimezoneOffset", -1],
     ["awarenessClientTimezoneOffset", -1],
   ];
-
-  for (const [field, multiplier] of candidates) {
+  for (const [field, mult] of candidates) {
     if (reqBody[field] === undefined || reqBody[field] === null || reqBody[field] === "") continue;
-    const numeric = Number(reqBody[field]);
-    if (!Number.isFinite(numeric)) continue;
-    return {
-      source: field,
-      rawMinutes: numeric,
-      appliedMinutes: numeric * multiplier,
-    };
+    const n = Number(reqBody[field]);
+    if (!Number.isFinite(n)) continue;
+    return { source: field, rawMinutes: n, appliedMinutes: n * mult };
   }
-
-  return { dt: new Date(), source: "invalid_fallback_now", received: raw };
   return null;
 }
 
+// --- Awareness-Zeit aus Request robust parsen ---
+function parseAwareness(reqBody) {
+  const raw = (reqBody && reqBody.awarenessTime ? String(reqBody.awarenessTime) : "").trim();
+  if (!raw) return { dt: new Date(), source: "fallback_now", received: raw, offsetMinutes: null };
+
+  const normalized = raw.replace(" ", "T"); // Safari/Locale-Fix
+  const off = extractOffset(reqBody);
+
+  // "YYYY-MM-DDTHH:mm" (datetime-local)
+  const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (m) {
+    const Y = Number(m[1]), Mo = Number(m[2]), D = Number(m[3]), H = Number(m[4]), Mi = Number(m[5]);
+    const baseUtc = Date.UTC(Y, Mo - 1, D, H, Mi);
+    if (off) {
+      // Offset anwenden: lokale Zeit -> UTC
+      const dt = new Date(baseUtc - off.appliedMinutes * 60000);
+      return { dt, source: `datetime-local(${off.source})`, received: raw, offsetMinutes: off.appliedMinutes };
+    }
+    // Fallback: als UTC interpretieren
+    return { dt: new Date(baseUtc), source: "datetime-local(assumed-utc)", received: raw, offsetMinutes: null };
+  }
+
+  // ISO mit Zeitzone etc.
+  const dt = new Date(normalized);
+  if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw, offsetMinutes: null };
+
+  return { dt: new Date(), source: "invalid_fallback_now", received: raw, offsetMinutes: null };
+}
+
+// --- Dateien entgegennehmen (nur Metadaten im MVP) ---
 function collectFiles(filesInput) {
   const MAX_FILES = 3, MAX_SIZE = 3 * 1024 * 1024;
   const files = Array.isArray(filesInput) ? filesInput : [];
@@ -107,13 +89,8 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "contactEmail und freeText sind Pflicht" });
   }
 
-  const { dt: awareness, source: awarenessSource, received: awarenessReceived } = parseAwareness(req.body);
-  const {
-    dt: awareness,
-    source: awarenessSource,
-    received: awarenessReceived,
-    offsetMinutes: awarenessOffsetMinutes,
-  } = parseAwareness(req.body);
+  const { dt: awareness, source: awarenessSource, received: awarenessReceived, offsetMinutes: awarenessOffsetMinutes } =
+    parseAwareness(req.body);
 
   const due = {
     earlyWarning: toISO(addHours(awareness, 24)),
@@ -127,11 +104,11 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     intakeId: "demo-" + Date.now(),
-    awarenessReceived,         // <- was vom Browser kam
-    awarenessSource,           // <- wie interpretiert
-    awarenessOffsetMinutes,
-    awarenessTime: toISO(awareness), // <- UTC
-    due,
+    awarenessReceived,            // was vom Browser kam ("2025-10-19T12:00")
+    awarenessSource,              // wie interpretiert (z. B. datetime-local(awarenessOffsetMinutes))
+    awarenessOffsetMinutes,       // z. B. 120
+    awarenessTime: toISO(awareness), // UTC
+    due,                          // +24h/+72h/+30d
     files: filesMeta,
     drafts: {
       earlyWarning: { reportType: "EARLY_WARNING" },
