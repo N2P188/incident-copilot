@@ -1,4 +1,5 @@
 // api/incident-intake.js
+import { put } from "@vercel/blob";
 
 // --- CORS erlauben ---
 function setCORS(res) {
@@ -30,52 +31,99 @@ function extractOffset(reqBody) {
   return null;
 }
 
-// --- Awareness-Zeit aus Request robust parsen ---
+// --- Awareness-Zeit robust parsen ---
 function parseAwareness(reqBody) {
   const raw = (reqBody && reqBody.awarenessTime ? String(reqBody.awarenessTime) : "").trim();
   if (!raw) return { dt: new Date(), source: "fallback_now", received: raw, offsetMinutes: null };
 
-  const normalized = raw.replace(" ", "T"); // Safari/Locale-Fix
+  const normalized = raw.replace(" ", "T");
   const off = extractOffset(reqBody);
 
-  // "YYYY-MM-DDTHH:mm" (datetime-local)
+  // "YYYY-MM-DDTHH:mm"
   const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
   if (m) {
     const Y = Number(m[1]), Mo = Number(m[2]), D = Number(m[3]), H = Number(m[4]), Mi = Number(m[5]);
     const baseUtc = Date.UTC(Y, Mo - 1, D, H, Mi);
     if (off) {
-      // Offset anwenden: lokale Zeit -> UTC
       const dt = new Date(baseUtc - off.appliedMinutes * 60000);
       return { dt, source: `datetime-local(${off.source})`, received: raw, offsetMinutes: off.appliedMinutes };
     }
-    // Fallback: als UTC interpretieren
     return { dt: new Date(baseUtc), source: "datetime-local(assumed-utc)", received: raw, offsetMinutes: null };
   }
 
-  // ISO mit Zeitzone etc.
   const dt = new Date(normalized);
   if (!isNaN(dt)) return { dt, source: "parsed_iso", received: raw, offsetMinutes: null };
 
   return { dt: new Date(), source: "invalid_fallback_now", received: raw, offsetMinutes: null };
 }
 
-// --- Dateien entgegennehmen (nur Metadaten im MVP) ---
-function collectFiles(filesInput) {
-  const MAX_FILES = 3, MAX_SIZE = 3 * 1024 * 1024;
+// ===== Upload-Helfer =====
+const MAX_FILES = 3;
+const MAX_SIZE = 3 * 1024 * 1024; // 3 MB
+
+const ALLOWED_MIME = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "message/rfc822",               // .eml
+  "application/vnd.ms-outlook",   // .msg (manchmal so)
+  "image/png",
+  "image/jpeg",
+  "application/octet-stream"      // Fallback
+]);
+
+const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".eml", ".msg", ".png", ".jpg", ".jpeg"];
+
+function hasAllowedExt(name) {
+  const lower = String(name || "").toLowerCase();
+  return ALLOWED_EXT.some(ext => lower.endsWith(ext));
+}
+
+function sanitizeName(name) {
+  return String(name)
+    .normalize("NFKD")
+    .replace(/[^\w.\-]+/g, "_")
+    .slice(0, 120);
+}
+
+async function uploadFilesToBlob(intakeId, filesInput) {
   const files = Array.isArray(filesInput) ? filesInput : [];
   if (files.length > MAX_FILES) throw new Error("Maximal 3 Dateien erlaubt.");
+
   const out = [];
   for (const f of files) {
-    const name = String(f?.name || "").slice(0, 200);
-    const type = String(f?.type || "") || "unknown";
+    const nameRaw = f?.name || "";
+    const name = sanitizeName(nameRaw);
+    const type = String(f?.type || "") || "application/octet-stream";
     const size = Number(f?.size || 0);
     const base64 = String(f?.data || "");
+
     if (!name || !base64) continue;
     if (size > MAX_SIZE) throw new Error(`Datei zu groß: ${name} (max. 3 MB)`);
-    out.push({ name, type, size });
+    if (!ALLOWED_MIME.has(type) && !hasAllowedExt(name)) {
+      throw new Error(`Dateityp/Endung nicht erlaubt: ${name} (${type || "unknown"})`);
+    }
+
+    // Base64 → Buffer
+    const buffer = Buffer.from(base64, "base64");
+    const path = `${intakeId}/${Date.now()}-${name}`;
+
+    const { url, pathname, size: storedSize } = await put(path, buffer, {
+      access: "public",
+      contentType: type
+    });
+
+    out.push({
+      name,
+      type,
+      size: storedSize ?? size,
+      url,            // öffentlich abrufbar
+      blobPath: pathname
+    });
   }
   return out;
 }
+// ===== Ende Upload-Helfer =====
 
 export const config = { api: { bodyParser: { sizeLimit: "20mb" } } };
 
@@ -98,18 +146,23 @@ export default async function handler(req, res) {
     finalReport: toISO(addDays(awareness, 30)),
   };
 
-  let filesMeta = [];
-  try { filesMeta = collectFiles(files); }
-  catch (e) { return res.status(400).json({ error: String(e.message || e) }); }
+  const intakeId = "demo-" + Date.now();
+
+  let uploaded = [];
+  try {
+    uploaded = await uploadFilesToBlob(intakeId, files);
+  } catch (e) {
+    return res.status(400).json({ error: String(e.message || e) });
+  }
 
   return res.status(200).json({
-    intakeId: "demo-" + Date.now(),
-    awarenessReceived,            // was vom Browser kam ("2025-10-19T12:00")
-    awarenessSource,              // wie interpretiert (z. B. datetime-local(awarenessOffsetMinutes))
-    awarenessOffsetMinutes,       // z. B. 120
+    intakeId,
+    awarenessReceived,
+    awarenessSource,
+    awarenessOffsetMinutes,
     awarenessTime: toISO(awareness), // UTC
-    due,                          // +24h/+72h/+30d
-    files: filesMeta,
+    due,
+    files: uploaded, // ⬅️ jetzt mit .url
     drafts: {
       earlyWarning: { reportType: "EARLY_WARNING" },
       incidentNotification: { reportType: "INCIDENT_NOTIFICATION" },
