@@ -216,5 +216,6 @@ try {
     due,
     files: uploaded,
     drafts: aiDrafts
+    debug: aiError ? { aiError } : undefined  // <-- TEMPORÄR zum Debuggen
   });
 }
