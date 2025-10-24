@@ -1,4 +1,5 @@
 // api/incident-intake.js
+import { generateAndUploadPDFs } from "../lib/pdf.js";
 import { askLLMAsJson } from "../lib/llm.js";
 import { buildIncidentPrompt } from "../lib/prompts.js";
 import { put } from "@vercel/blob";
