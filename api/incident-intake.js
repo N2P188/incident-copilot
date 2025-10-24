@@ -202,6 +202,26 @@ export default async function handler(req, res) {
       }
     };
   }
+  // === PDFs erzeugen & hochladen ===
+  let pdfs = {};
+  try {
+    // Drafts leicht mit Meta anreichern (ein paar Kopf-Felder)
+    const baseMeta = {
+      company: (contactEmail || "").split("@")[1] ? (contactEmail.split("@")[1]) : undefined,
+      contact: contactEmail,
+      awareness: toISO(awareness),
+    };
+    // Meta in alle Drafts injizieren (idempotent)
+    ["earlyWarning", "incidentNotification", "finalReport"].forEach(k => {
+      if (!aiDrafts[k]) return;
+      aiDrafts[k].meta = { ...(aiDrafts[k].meta || {}), ...baseMeta };
+    });
+
+    pdfs = await generateAndUploadPDFs(intakeId, aiDrafts);
+  } catch (e) {
+    // Soft-Fail: API liefert trotzdem Daten, nur ohne PDFs
+    pdfs = { error: String(e?.message || e) };
+  }
 
   // --- Response ---
   return res.status(200).json({
