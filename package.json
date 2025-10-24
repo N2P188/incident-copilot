@@ -1,1 +1,14 @@
-
+{
+  "name": "incident-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@vercel/blob": "^0.24.0",
+    "openai": "^4.67.3",
+    "pdfkit": "^0.13.0"
+  }
+}
