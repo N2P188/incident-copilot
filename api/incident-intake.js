@@ -224,7 +224,7 @@ export default async function handler(req, res) {
   }
 
   // --- Response ---
-  return res.status(200).json({
+    return res.status(200).json({
     intakeId,
     awarenessReceived,
     awarenessSource,
@@ -232,6 +232,7 @@ export default async function handler(req, res) {
     awarenessTime: toISO(awareness),
     due,
     files: uploaded,
-    drafts: aiDrafts
+    drafts: aiDrafts,
+    pdfs
   });
 }
